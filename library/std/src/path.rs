@@ -2038,9 +2038,9 @@ impl FromStr for PathBuf {
 impl<P: AsRef<Path>> FromIterator<P> for PathBuf {
     /// Creates a new `PathBuf` from the [`Path`] elements of an iterator.
     ///
-    /// This normally uses [`push`](Self::push) to add each element. When collecting
-    /// [`Component`]s of a verbatim Windows path, forward slashes within components are
-    /// preserved instead of being treated as separators.
+    /// This normally uses [`push`](Self::push) to add each element. When the first
+    /// element is a verbatim Windows prefix, later components are appended
+    /// without reinterpreting forward slashes as separators.
     ///
     /// # Examples
     /// ```
@@ -2057,42 +2057,13 @@ impl<P: AsRef<Path>> FromIterator<P> for PathBuf {
     }
 }
 
-// Components of a verbatim Windows path may contain forward slashes as literal
-// characters. Unlike arbitrary paths, they must not be parsed again by `push`.
-trait SpecExtendPath {
-    fn spec_extend_into(self, buf: &mut PathBuf);
-}
-
-impl<P: AsRef<Path>> SpecExtendPath for P {
-    default fn spec_extend_into(self, buf: &mut PathBuf) {
-        buf.push(self.as_ref());
-    }
-}
-
-impl SpecExtendPath for Component<'_> {
-    fn spec_extend_into(self, buf: &mut PathBuf) {
-        if buf.components().prefix_verbatim()
-            && matches!(self, Component::Normal(_) | Component::CurDir | Component::ParentDir)
-        {
-            // Only backslashes separate verbatim components. A trailing slash
-            // within a Normal component is literal and still needs a separator.
-            if buf.inner.as_encoded_bytes().last().is_some_and(|&b| !is_verbatim_sep(b)) {
-                buf.inner.push(MAIN_SEPARATOR_STR);
-            }
-            buf.inner.push(self.as_os_str());
-        } else {
-            buf.push(self.as_os_str());
-        }
-    }
-}
-
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<P: AsRef<Path>> Extend<P> for PathBuf {
     /// Extends `self` with [`Path`] elements from `iter`.
     ///
-    /// This normally uses [`push`](Self::push) to add each element. When collecting
-    /// [`Component`]s of a verbatim Windows path, forward slashes within components are
-    /// preserved instead of being treated as separators.
+    /// This normally uses [`push`](Self::push) to add each element. When the first
+    /// element is a verbatim Windows prefix, subsequent components are appended
+    /// without reinterpreting forward slashes as separators.
     ///
     /// # Examples
     /// ```
@@ -2104,12 +2075,41 @@ impl<P: AsRef<Path>> Extend<P> for PathBuf {
     ///
     /// See documentation for [`push`](Self::push) for more details on how the path is constructed.
     fn extend<I: IntoIterator<Item = P>>(&mut self, iter: I) {
-        iter.into_iter().for_each(move |p| p.spec_extend_into(self));
+        let mut verbatim_components = false;
+        let mut after_prefix = false;
+        for item in iter {
+            let path = item.as_ref();
+            if self.inner.is_empty() {
+                let comps = path.components();
+                if comps.prefix_verbatim() && comps.prefix_len() == path.as_u8_slice().len() {
+                    // A component iterator starts with the standalone prefix.
+                    self.push(path);
+                    verbatim_components = true;
+                    after_prefix = true;
+                    continue;
+                }
+            }
+            if verbatim_components {
+                // Remaining items are already components. Re-parsing a Normal
+                // component would turn literal '/' into a separator, or treat a
+                // leading '/' or a drive-like name as a new root or prefix.
+                // A rootless verbatim path has no separator after its prefix.
+                if !after_prefix
+                    && self.inner.as_encoded_bytes().last().is_some_and(|&b| !is_verbatim_sep(b))
+                {
+                    self.inner.push(MAIN_SEPARATOR_STR);
+                }
+                self.inner.push(path);
+                after_prefix = false;
+            } else {
+                self.push(path);
+            }
+        }
     }
 
     #[inline]
     fn extend_one(&mut self, p: P) {
-        p.spec_extend_into(self);
+        self.push(p.as_ref());
     }
 }
 

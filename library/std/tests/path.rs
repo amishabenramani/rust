@@ -2628,6 +2628,10 @@ fn verbatim_path_components_collect_preserves_forward_slashes() {
         r"\\?\C:\a/\b",
         r"\\?\C:\a\.\b",
         r"\\?\C:\a\..\b",
+        r"\\?\C:\/literal",
+        r"\\?\C:\folder\C:literal",
+        r"\\?\C:a/b",
+        r"\\?\UNC\server\share\/literal",
     ] {
         let path = Path::new(input);
         let collected: PathBuf = path.components().collect();
@@ -2637,14 +2641,22 @@ fn verbatim_path_components_collect_preserves_forward_slashes() {
 
 #[cfg(windows)]
 #[test]
-fn verbatim_path_extend_preserves_components_but_not_arbitrary_paths() {
-    let mut from_components = PathBuf::from(r"\\?\C:\root");
-    from_components
-        .extend([Component::Normal(OsStr::new("a/")), Component::Normal(OsStr::new("b"))]);
-    assert_eq!(from_components, Path::new(r"\\?\C:\root\a/\b"));
-
-    // An arbitrary relative path must still use the existing push normalization.
+fn verbatim_path_collect_keeps_push_and_extend_unchanged() {
+    // The ordinary path-joining APIs still parse relative paths normally.
     let mut from_paths = PathBuf::from(r"\\?\C:\root");
     from_paths.extend(["a/b"]);
     assert_eq!(from_paths, Path::new(r"\\?\C:\root\a\b"));
+
+    let mut pushed = PathBuf::from(r"\\?\C:\root");
+    pushed.push("../foo");
+    assert_eq!(pushed, Path::new(r"\\?\C:\foo"));
+
+    // Extending a new buffer from components also preserves verbatim syntax.
+    let mut extended = PathBuf::new();
+    extended.extend(Path::new(r"\\?\C:\a/b").components());
+    assert_eq!(extended.as_os_str(), Path::new(r"\\?\C:\a/b").as_os_str());
+
+    // Ordinary paths that happen to start with a verbatim prefix still use push.
+    let collected: PathBuf = [r"\\?\C:\root", "a/b"].into_iter().collect();
+    assert_eq!(collected, Path::new(r"\\?\C:\root\a\b"));
 }

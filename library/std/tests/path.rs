@@ -2614,3 +2614,37 @@ fn trailing_sep_verbatim() {
     assert_eq!(Path::new(r"\\?\C:\").trim_trailing_sep(), Path::new(r"\\?\C:\"));
     assert_eq!(Path::new(r"\\?\C:/").trim_trailing_sep(), Path::new(r"\\?\C:/"));
 }
+
+#[cfg(windows)]
+#[test]
+fn verbatim_path_components_collect_preserves_forward_slashes() {
+    // Forward slashes are not separators inside verbatim path components.
+    for input in [
+        r"\\?\C:\a/b",
+        r"\\?\C:\a//b",
+        r"\\?\C:\a/b\c",
+        r"\\?\UNC\server\share\a/b",
+        r"\\?\C:\a/../b",
+        r"\\?\C:\a/\b",
+        r"\\?\C:\a\.\b",
+        r"\\?\C:\a\..\b",
+    ] {
+        let path = Path::new(input);
+        let collected: PathBuf = path.components().collect();
+        assert_eq!(collected.as_os_str(), path.as_os_str(), "component round trip for {input:?}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn verbatim_path_extend_preserves_components_but_not_arbitrary_paths() {
+    let mut from_components = PathBuf::from(r"\\?\C:\root");
+    from_components
+        .extend([Component::Normal(OsStr::new("a/")), Component::Normal(OsStr::new("b"))]);
+    assert_eq!(from_components, Path::new(r"\\?\C:\root\a/\b"));
+
+    // An arbitrary relative path must still use the existing push normalization.
+    let mut from_paths = PathBuf::from(r"\\?\C:\root");
+    from_paths.extend(["a/b"]);
+    assert_eq!(from_paths, Path::new(r"\\?\C:\root\a\b"));
+}
